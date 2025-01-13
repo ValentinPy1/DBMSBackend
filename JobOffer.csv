@@ -1,4 +1,0 @@
-JobOfferID,Location,CreatedBy,Status,Date,StartTime,EndTime,MaxWage,WorkingDays,Hours
-1,1,1,Open,2023-12-01,09:00:00,17:00:00,45.0,5,8
-2,2,3,Closed,2023-11-15,08:00:00,16:00:00,50.0,5,8
-3,3,4,Open,2023-12-10,10:00:00,18:00:00,40.0,4,8
