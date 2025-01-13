@@ -48,7 +48,7 @@ CREATE TABLE JobOffer (
     JobOfferID INT PRIMARY KEY,
     Location INT,
     CreatedBy INT,
-    Status ENUM('Open', 'Closed / Waiting for execution', 'Running', 'Finished') NOT NULL,
+    Status ENUM('Open', 'Confirmed', 'Running', 'Completed') NOT NULL,
     Date DATE,
     StartTime TIME,
     EndTime TIME,
