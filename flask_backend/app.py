@@ -39,14 +39,27 @@ def test_connection():
     conn = get_db_connection()
     if conn and conn.is_connected():
         cursor = conn.cursor(dictionary=True)
+        
+        # Get all table names
         cursor.execute("SHOW TABLES")
-        tables = cursor.fetchall()
+        tables_raw = cursor.fetchall()
+        
+        # Store data from each table
+        data = {}
+        for table_dict in tables_raw:
+            # Get the first (and only) value from the dictionary
+            table_name = list(table_dict.values())[0]
+            cursor.execute(f"SELECT * FROM {table_name}")
+            data[table_name] = cursor.fetchall()
+        
         cursor.close()
         conn.close()
+        
         return jsonify({
             "message": "Database connection successful!",
-            "tables": tables
+            "data": data
         })
+    
     return jsonify({"message": "Database connection failed!"}), 500
 
 #  Employer Endpoints 
@@ -104,8 +117,35 @@ def update_application_status(application_id):
 
 @app.route('/api/workers', methods=['GET'])
 def get_all_workers():
-    # TODO: Get all workers
-    return jsonify({"workers": []})
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    if conn:
+        try:
+            # Create cursor with dictionary=True to get results as dictionaries
+            cursor = conn.cursor(dictionary=True)
+            
+            # Execute SQL query to get all workers
+            cursor.execute("""
+                SELECT U.UserID, U.FirstName, U.Surname, U.Name, U.Email, U.PhoneNumber, W.Experiences, W.Description 
+                FROM User as U, Worker as W
+                WHERE U.UserID = W.UserID
+            """)
+            
+            # Fetch all results
+            workers = cursor.fetchall()
+            
+            # Clean up
+            cursor.close()
+            conn.close()
+            
+            # Return results as JSON
+            return jsonify({"workers": workers})
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 #  Worker Endpoints 
 
