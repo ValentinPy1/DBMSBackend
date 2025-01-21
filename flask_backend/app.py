@@ -65,25 +65,25 @@ def test_connection():
 #  Employer Endpoints 
 
 # Company Management
-@app.route('/api/companies', methods=['POST'])
-def create_company():
+@app.route('/api/employers/<int:employer_id>/companies', methods=['POST'])
+def create_company(employer_id):
     # Get data from request
     data = request.json
-    if not data or 'name' not in data or 'createdBy' not in data:
-        return jsonify({"error": "Company name and creator ID (createdBy) are required"}), 400
+    if not data or 'name' not in data:
+        return jsonify({"error": "Company name is required"}), 400
     
     conn = get_db_connection()
     if conn:
         try:
             cursor = conn.cursor(dictionary=True)
             
-            # First verify if the createdBy ID exists in Employer table
-            cursor.execute("SELECT UserID FROM Employer WHERE UserID = %s", (data['createdBy'],))
+            # First verify if the employer_id exists in Employer table
+            cursor.execute("SELECT UserID FROM Employer WHERE UserID = %s", (employer_id,))
             employer = cursor.fetchone()
             
             if not employer:
                 return jsonify({
-                    "error": "Invalid creator ID. The user must be an employer to create a company."
+                    "error": "Invalid employer ID. The user must be an employer to create a company."
                 }), 400
             
             # Get the maximum CompanyID to determine the next ID
@@ -95,12 +95,19 @@ def create_company():
             query = "INSERT INTO Company (CompanyID, CreatedBy, Name, Location) VALUES (%s, %s, %s, %s)"
             values = (
                 next_id,  # Use the next available ID
-                data['createdBy'],  # employer ID who creates the company
+                employer_id,  # employer ID from URL parameter
                 data['name'],
                 data.get('location', 'TBD')  # location is optional
             )
             
             cursor.execute(query, values)
+            
+            # Insert a new row in the Employer table for this company
+            cursor.execute("""
+                INSERT INTO Employer (Company, UserID) 
+                VALUES (%s, %s)
+            """, (next_id, employer_id))
+            
             conn.commit()
             
             cursor.close()
@@ -118,12 +125,6 @@ def create_company():
 
 @app.route('/api/employers/company/<int:company_id>', methods=['PUT'])
 def join_company(company_id):
-    # TODO: Join a company
-    # Expected input: employer_id
-    return jsonify({"message": "Joined company successfully"})
-
-@app.route('/api/employers/company', methods=['PUT'])
-def quit_company():
     # Get data from request
     data = request.json
     if not data or 'employer_id' not in data:
@@ -134,30 +135,88 @@ def quit_company():
         try:
             cursor = conn.cursor(dictionary=True)
             
-            # First verify if the employer exists and has a company
-            cursor.execute("""
-                SELECT e.UserID, e.Company, c.Name as CompanyName 
-                FROM Employer e, Company c
-                WHERE e.Company = c.CompanyID AND e.UserID = %s
-            """, (data['employer_id'],))
+            # First verify if the employer exists
+            cursor.execute("SELECT UserID FROM Employer WHERE UserID = %s", (data['employer_id'],))
             employer = cursor.fetchone()
             
             if not employer:
                 return jsonify({
                     "error": "Invalid employer ID"
                 }), 400
-                
-            if not employer['Company']:
+            
+            # Verify if the company exists
+            cursor.execute("SELECT CompanyID, Name FROM Company WHERE CompanyID = %s", (company_id,))
+            company = cursor.fetchone()
+            
+            if not company:
                 return jsonify({
-                    "error": "Employer is not part of any company"
+                    "error": "Company not found"
+                }), 404
+            
+            # Check if employer is already in this company
+            cursor.execute("""
+                SELECT * FROM Employer  
+                WHERE UserID = %s AND Company = %s
+            """, (data['employer_id'], company_id))
+            
+            if cursor.fetchone():
+                return jsonify({
+                    "error": "Employer is already part of this company"
                 }), 400
             
-            # Update employer's company to NULL
+            # Insert new row in Employer table
+            cursor.execute("""
+                INSERT INTO Employer (Company, UserID) 
+                VALUES (%s, %s)
+            """, (company_id, data['employer_id']))
+            
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": f"Successfully joined company {company['Name']}"
+            })
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
+
+@app.route('/api/employers/<int:employer_id>/company', methods=['PUT'])
+def quit_company(employer_id):
+    # Get data from request
+    data = request.json
+    if not data or 'company_id' not in data:
+        return jsonify({"error": "Company ID is required"}), 400
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the employer exists and has this specific company
+            cursor.execute("""
+                SELECT e.UserID, e.Company, c.Name as CompanyName, c.CreatedBy
+                FROM Employer e, Company c
+                WHERE e.Company = c.CompanyID 
+                AND e.UserID = %s 
+                AND e.Company = %s
+            """, (employer_id, data['company_id']))
+            employer = cursor.fetchone()
+            
+            if not employer:
+                return jsonify({
+                    "error": "Invalid employer ID or employer is not part of this company"
+                }), 400
+            
+            # Update the employer's company to NULL
             cursor.execute("""
                 UPDATE Employer 
                 SET Company = NULL 
-                WHERE UserID = %s
-            """, (data['employer_id'],))
+                WHERE UserID = %s AND Company = %s
+            """, (employer_id, data['company_id']))
             
             conn.commit()
             
@@ -175,35 +234,380 @@ def quit_company():
 
 @app.route('/api/companies/<int:company_id>/locations', methods=['POST'])
 def add_location(company_id):
-    # TODO: Add new location
-    # Expected input: street, number, city
-    return jsonify({"message": "Location added successfully"}), 201
+    # Get data from request
+    data = request.json
+    if not data or 'street' not in data or 'number' not in data or 'city' not in data:
+        return jsonify({
+            "error": "Street, number, and city are required"
+        }), 400
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the company exists
+            cursor.execute("SELECT CompanyID FROM Company WHERE CompanyID = %s", (company_id,))
+            company = cursor.fetchone()
+            
+            if not company:
+                return jsonify({
+                    "error": "Company not found"
+                }), 404
+            
+            # Get the maximum LocationID to determine the next ID
+            cursor.execute("SELECT MAX(LocationID) as max_id FROM Location")
+            result = cursor.fetchone()
+            next_id = 1 if result['max_id'] is None else result['max_id'] + 1
+            
+            # Insert new location
+            query = "INSERT INTO Location (LocationID, Company, Street, Number, City) VALUES (%s, %s, %s, %s, %s)"
+            values = (
+                next_id,
+                company_id,
+                data['street'],
+                data['number'],
+                data['city']
+            )
+            
+            cursor.execute(query, values)
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": "Location added successfully",
+                "location_id": next_id
+            }), 201
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
-@app.route('/api/companies/<int:company_id>/locations/<int:location_id>', methods=['DELETE'])
-def delete_location(company_id, location_id):
-    # TODO: Delete location
-    return jsonify({"message": "Location deleted successfully"})
+@app.route('/api/companies/<int:company_id>/locations', methods=['DELETE'])
+def delete_location(company_id):
+    # Get data from request
+    data = request.json
+    if not data or 'location_id' not in data:
+        return jsonify({"error": "Location ID is required"}), 400
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the location exists and belongs to the company
+            cursor.execute("""
+                SELECT LocationID, Company 
+                FROM Location 
+                WHERE LocationID = %s AND Company = %s
+            """, (data['location_id'], company_id))
+            location = cursor.fetchone()
+            
+            if not location:
+                return jsonify({
+                    "error": "Location not found or doesn't belong to this company"
+                }), 404
+            
+            # Check if this is the company's only location
+            cursor.execute("""
+                SELECT COUNT(*) as count 
+                FROM Location 
+                WHERE Company = %s
+            """, (company_id,))
+            location_count = cursor.fetchone()['count']
+            
+            if location_count <= 1:
+                return jsonify({
+                    "error": "Cannot delete the only location of a company. Company must have at least one location."
+                }), 400
+            
+            # Check if there are any job offers for this location
+            cursor.execute("""
+                SELECT COUNT(*) as count 
+                FROM JobOffer 
+                WHERE Location = %s
+            """, (data['location_id'],))
+            joboffer_count = cursor.fetchone()['count']
+            
+            if joboffer_count > 0:
+                return jsonify({
+                    "error": "Cannot delete location with active job offers. Please delete the job offers first."
+                }), 400
+            
+            # If all checks pass, delete the location
+            cursor.execute("DELETE FROM Location WHERE LocationID = %s", (data['location_id'],))
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": "Location deleted successfully"
+            })
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 # Job Management
-@app.route('/api/joboffers', methods=['POST'])
-def create_job_offer():
-    # TODO: Create new job offer
-    # Expected input: location_id, date, start_time, end_time, max_wage, working_days, hours
-    return jsonify({"message": "Job offer created successfully"}), 201
+@app.route('/api/employers/<int:employer_id>/joboffers', methods=['POST'])
+def create_job_offer(employer_id):
+    # Get data from request
+    data = request.json
+    if not data or 'location_id' not in data or 'date' not in data or \
+       'start_time' not in data or 'end_time' not in data or \
+       'max_wage' not in data or 'working_days' not in data or \
+       'hours' not in data:
+        return jsonify({
+            "error": "Required fields: location_id, date, start_time, end_time, max_wage, working_days, hours"
+        }), 400
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the employer exists
+            cursor.execute("""
+                SELECT e.UserID, e.Company 
+                FROM Employer e
+                WHERE e.UserID = %s
+            """, (employer_id,))
+            employer = cursor.fetchall()  # Fetch ALL results
+            
+            if not employer:
+                return jsonify({
+                    "error": "Invalid employer ID"
+                }), 404
+            
+            # Verify if the location exists and belongs to employer's company
+            cursor.execute("""
+                SELECT LocationID, Company 
+                FROM Location 
+                WHERE LocationID = %s AND Company = %s
+            """, (data['location_id'], employer[0]['Company']))
+            location = cursor.fetchall()  # Fetch ALL results
+            
+            if not location:
+                return jsonify({
+                    "error": "Location not found or doesn't belong to your company"
+                }), 404
+            
+            # Get the maximum JobOfferID to determine the next ID
+            cursor.execute("SELECT MAX(JobOfferID) as max_id FROM JobOffer")
+            result = cursor.fetchall()  # Fetch ALL results
+            next_id = 1 if result[0]['max_id'] is None else result[0]['max_id'] + 1
+            
+            # Insert new job offer
+            query = """
+                INSERT INTO JobOffer (
+                    JobOfferID, Location, CreatedBy, Status, Date, 
+                    StartTime, EndTime, MaxWage, WorkingDays, Hours
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """
+            values = (
+                next_id,
+                data['location_id'],
+                employer_id,  # CreatedBy from URL parameter
+                'Open',      # Default status
+                data['date'],
+                data['start_time'],
+                data['end_time'],
+                data['max_wage'],
+                data['working_days'],
+                data['hours']
+            )
+            
+            cursor.execute(query, values)
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": "Job offer created successfully",
+                "job_offer_id": next_id
+            }), 201
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
-@app.route('/api/employers/joboffers', methods=['GET'])
-def get_my_job_offers():
-    # TODO: Get job offers for employer
-    # Optional query param: status
+@app.route('/api/employers/<int:employer_id>/joboffers', methods=['GET'])
+def get_my_job_offers(employer_id):
+    # Optional status filter from query parameters
     status = request.args.get('status')
-    return jsonify({"job_offers": []})
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the employer exists
+            cursor.execute("""
+                SELECT UserID FROM Employer 
+                WHERE UserID = %s
+            """, (employer_id,))
+            employer = cursor.fetchall()
+            
+            if not employer:
+                return jsonify({
+                    "error": "Invalid employer ID"
+                }), 404
+            
+            # Base query with joins to get location and company info
+            base_query = """
+                SELECT 
+                    j.JobOfferID,
+                    j.Location,
+                    j.Status,
+                    j.Date,
+                    j.StartTime,
+                    j.EndTime,
+                    j.MaxWage,
+                    j.WorkingDays,
+                    j.Hours,
+                    l.Street,
+                    l.Number,
+                    l.City,
+                    c.Name as CompanyName
+                FROM JobOffer j, Location l, Company c
+                WHERE j.Location = l.LocationID
+                  AND l.Company = c.CompanyID
+                  AND j.CreatedBy = %s
+            """
+            
+            # Add status filter if provided
+            if status:
+                base_query += " AND j.Status = %s"
+                cursor.execute(base_query, (employer_id, status))
+            else:
+                cursor.execute(base_query, (employer_id,))
+            
+            job_offers = cursor.fetchall()
+            
+            # Convert datetime/timedelta objects to strings
+            for job in job_offers:
+                if job.get('Date'):
+                    job['Date'] = job['Date'].strftime('%Y-%m-%d')
+                if job.get('StartTime'):
+                    # Convert timedelta to string in HH:MM:SS format
+                    total_seconds = int(job['StartTime'].total_seconds())
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    seconds = total_seconds % 60
+                    job['StartTime'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                if job.get('EndTime'):
+                    # Convert timedelta to string in HH:MM:SS format
+                    total_seconds = int(job['EndTime'].total_seconds())
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    seconds = total_seconds % 60
+                    job['EndTime'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": "Job offers retrieved successfully",
+                "job_offers": job_offers
+            })
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 # Application Management
-@app.route('/api/applications/<int:application_id>/status', methods=['PUT'])
-def update_application_status(application_id):
-    # TODO: Update application status (refused/accepted)
-    # Expected input: new_status
-    return jsonify({"message": "Application status updated successfully"})
+@app.route('/api/applications/status', methods=['PUT'])
+def update_application_status():
+    # Get data from request
+    data = request.json
+    if not data or 'new_status' not in data or 'job_offer_id' not in data or 'worker_id' not in data:
+        return jsonify({
+            "error": "Required fields: new_status, job_offer_id, worker_id"
+        }), 400
+        
+    # Validate status value
+    valid_statuses = ['Accepted', 'Refused']
+    if data['new_status'] not in valid_statuses:
+        return jsonify({
+            "error": f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+        }), 400
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the application exists
+            cursor.execute("""
+                SELECT a.JobOfferID, a.WorkerID, a.Status, j.Status as JobStatus
+                FROM Application a, JobOffer j
+                WHERE a.JobOfferID = j.JobOfferID
+                  AND a.JobOfferID = %s AND a.WorkerID = %s
+            """, (data['job_offer_id'], data['worker_id']))
+            application = cursor.fetchone()
+            
+            if not application:
+                return jsonify({
+                    "error": "Application not found"
+                }), 404
+            
+            # Check if application is already processed
+            if application['Status'] in ['Accepted', 'Refused']:
+                return jsonify({
+                    "error": f"Application is already {application['Status'].lower()}"
+                }), 400
+            
+            # Check if job offer is still open
+            if application['JobStatus'] != 'Open':
+                return jsonify({
+                    "error": "Cannot update application status: Job offer is no longer open"
+                }), 400
+            
+            # Update application status
+            cursor.execute("""
+                UPDATE Application 
+                SET Status = %s 
+                WHERE JobOfferID = %s AND WorkerID = %s
+            """, (data['new_status'], data['job_offer_id'], data['worker_id']))
+            
+            # If accepting the application, close the job offer
+            if data['new_status'] == 'Accepted':
+                cursor.execute("""
+                    UPDATE JobOffer 
+                    SET Status = 'Completed' 
+                    WHERE JobOfferID = %s
+                """, (data['job_offer_id'],))
+                
+                # Refuse all other pending applications for this job offer
+                cursor.execute("""
+                    UPDATE Application 
+                    SET Status = 'Refused' 
+                    WHERE JobOfferID = %s 
+                    AND WorkerID != %s 
+                    AND Status = 'Pending'
+                """, (data['job_offer_id'], data['worker_id']))
+            
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": f"Application status updated to {data['new_status']}"
+            })
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 @app.route('/api/workers', methods=['GET'])
 def get_all_workers():
