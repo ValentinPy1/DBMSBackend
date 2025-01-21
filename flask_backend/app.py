@@ -4,6 +4,7 @@ from mysql.connector import Error
 import mysql.connector
 import os
 from dotenv import load_dotenv
+from datetime import date
 
 # fill .env file with your credentials
 # DB_HOST=localhost
@@ -697,24 +698,248 @@ def get_available_jobs():
 
 @app.route('/api/joboffers/<int:job_id>/apply', methods=['POST'])
 def apply_to_job(job_id):
-    # TODO: Create job application
-    # Expected input: worker_id, wage_offer
-    return jsonify({"message": "Application submitted successfully"}), 201
+    # Get data from request
+    data = request.json
+    if not data or 'worker_id' not in data or 'wage_offer' not in data:
+        return jsonify({
+            "error": "Required fields: worker_id, wage_offer"
+        }), 400
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the job offer exists and is open
+            cursor.execute("""
+                SELECT JobOfferID, Status, MaxWage 
+                FROM JobOffer 
+                WHERE JobOfferID = %s
+            """, (job_id,))
+            job_offer = cursor.fetchone()
+            
+            if not job_offer:
+                return jsonify({
+                    "error": "Job offer not found"
+                }), 404
+                
+            if job_offer['Status'] != 'Open':
+                return jsonify({
+                    "error": "This job offer is no longer open for applications"
+                }), 400
+            
+            # Verify if the worker exists
+            cursor.execute("""
+                SELECT UserID 
+                FROM Worker 
+                WHERE UserID = %s
+            """, (data['worker_id'],))
+            worker = cursor.fetchone()
+            
+            if not worker:
+                return jsonify({
+                    "error": "Invalid worker ID"
+                }), 404
+            
+            # Check if wage offer is not higher than maximum wage
+            if float(data['wage_offer']) > float(job_offer['MaxWage']):
+                return jsonify({
+                    "error": f"Wage offer cannot be higher than maximum wage ({job_offer['MaxWage']})"
+                }), 400
+            
+            # Check if worker has already applied to this job offer
+            cursor.execute("""
+                SELECT Status 
+                FROM Application 
+                WHERE JobOfferID = %s AND WorkerID = %s
+            """, (job_id, data['worker_id']))
+            existing_application = cursor.fetchone()
+            
+            if existing_application:
+                return jsonify({
+                    "error": "You have already applied to this job offer"
+                }), 400
+            
+            # Get current date in YYYY-MM-DD format
+            current_date = date.today().strftime('%Y-%m-%d')
+            
+            # Create the application with current date
+            cursor.execute("""
+                INSERT INTO Application (JobOfferID, WorkerID, Status, WageOffer, Date) 
+                VALUES (%s, %s, %s, %s, %s)
+            """, (job_id, data['worker_id'], 'PENDING', data['wage_offer'], current_date))
+            
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": "Application submitted successfully",
+                "application_date": current_date
+            }), 201
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
-@app.route('/api/workers/applications', methods=['GET'])
-def get_my_applications():
-    # TODO: Get worker's applications
-    # Optional query param: status
+@app.route('/api/workers/<int:worker_id>/applications', methods=['GET'])
+def get_my_applications(worker_id):
+    # Optional status filter from query parameters
     status = request.args.get('status')
-    return jsonify({"applications": []})
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the worker exists
+            cursor.execute("""
+                SELECT UserID 
+                FROM Worker 
+                WHERE UserID = %s
+            """, (worker_id,))
+            worker = cursor.fetchone()
+            
+            if not worker:
+                return jsonify({
+                    "error": "Invalid worker ID"
+                }), 404
+            
+            # Base query with joins to get job offer, location and company info
+            base_query = """
+                SELECT 
+                    a.JobOfferID,
+                    a.WorkerID,
+                    a.Status as ApplicationStatus,
+                    a.WageOffer,
+                    a.Date as ApplicationDate,
+                    j.Status as JobStatus,
+                    j.Date as JobDate,
+                    j.StartTime,
+                    j.EndTime,
+                    j.MaxWage,
+                    j.WorkingDays,
+                    j.Hours,
+                    l.Street,
+                    l.Number,
+                    l.City,
+                    c.Name as CompanyName
+                FROM Application a, JobOffer j, Location l, Company c
+                WHERE a.JobOfferID = j.JobOfferID
+                  AND j.Location = l.LocationID
+                  AND l.Company = c.CompanyID
+                  AND a.WorkerID = %s
+            """
+            
+            # Add status filter if provided
+            if status:
+                base_query += " AND a.Status = %s"
+                cursor.execute(base_query, (worker_id, status))
+            else:
+                cursor.execute(base_query, (worker_id,))
+            
+            applications = cursor.fetchall()
+            
+            # Convert datetime/timedelta objects to strings
+            for app in applications:
+                if app.get('ApplicationDate'):
+                    app['ApplicationDate'] = app['ApplicationDate'].strftime('%Y-%m-%d')
+                if app.get('JobDate'):
+                    app['JobDate'] = app['JobDate'].strftime('%Y-%m-%d')
+                if app.get('StartTime'):
+                    # Convert timedelta to string in HH:MM:SS format
+                    total_seconds = int(app['StartTime'].total_seconds())
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    seconds = total_seconds % 60
+                    app['StartTime'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                if app.get('EndTime'):
+                    # Convert timedelta to string in HH:MM:SS format
+                    total_seconds = int(app['EndTime'].total_seconds())
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    seconds = total_seconds % 60
+                    app['EndTime'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": "Applications retrieved successfully",
+                "applications": applications
+            })
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 @app.route('/api/joboffers/<int:job_id>/employer', methods=['GET'])
 def get_job_employer_info(job_id):
-    # TODO: Get employer and company info for job
-    return jsonify({
-        "employer": {},
-        "company": {}
-    })
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # Get job offer with employer and company information
+            cursor.execute("""
+                SELECT 
+                    j.JobOfferID,
+                    j.CreatedBy as EmployerID,
+                    u.FirstName,
+                    u.Surname,
+                    u.Email,
+                    u.PhoneNumber,
+                    c.CompanyID,
+                    c.Name as CompanyName,
+                    l.Street,
+                    l.Number,
+                    l.City
+                FROM JobOffer j, User u, Location l, Company c
+                WHERE j.CreatedBy = u.UserID
+                  AND j.Location = l.LocationID
+                  AND l.Company = c.CompanyID
+                  AND j.JobOfferID = %s
+            """, (job_id,))
+            
+            result = cursor.fetchone()
+            
+            if not result:
+                return jsonify({
+                    "error": "Job offer not found"
+                }), 404
+            
+            # Structure the response
+            response = {
+                "employer": {
+                    "id": result['EmployerID'],
+                    "first_name": result['FirstName'],
+                    "surname": result['Surname'],
+                    "email": result['Email'],
+                    "phone_number": result['PhoneNumber']
+                },
+                "company": {
+                    "id": result['CompanyID'],
+                    "name": result['CompanyName'],
+                    "location": {
+                        "street": result['Street'],
+                        "number": result['Number'],
+                        "city": result['City']
+                    }
+                }
+            }
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify(response)
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 if __name__ == '__main__':
     app.run(debug=True, port=4000)
