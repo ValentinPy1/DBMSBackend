@@ -67,9 +67,54 @@ def test_connection():
 # Company Management
 @app.route('/api/companies', methods=['POST'])
 def create_company():
-    # TODO: Create a new company
-    # Expected input: company name, location
-    return jsonify({"message": "Company created successfully"}), 201
+    # Get data from request
+    data = request.json
+    if not data or 'name' not in data or 'createdBy' not in data:
+        return jsonify({"error": "Company name and creator ID (createdBy) are required"}), 400
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the createdBy ID exists in Employer table
+            cursor.execute("SELECT UserID FROM Employer WHERE UserID = %s", (data['createdBy'],))
+            employer = cursor.fetchone()
+            
+            if not employer:
+                return jsonify({
+                    "error": "Invalid creator ID. The user must be an employer to create a company."
+                }), 400
+            
+            # Get the maximum CompanyID to determine the next ID
+            cursor.execute("SELECT MAX(CompanyID) as max_id FROM Company")
+            result = cursor.fetchone()
+            next_id = 1 if result['max_id'] is None else result['max_id'] + 1
+            
+            # Insert new company with columns specified in correct order
+            query = "INSERT INTO Company (CompanyID, CreatedBy, Name, Location) VALUES (%s, %s, %s, %s)"
+            values = (
+                next_id,  # Use the next available ID
+                data['createdBy'],  # employer ID who creates the company
+                data['name'],
+                data.get('location', 'TBD')  # location is optional
+            )
+            
+            cursor.execute(query, values)
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": "Company created successfully",
+                "company_id": next_id
+            }), 201
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 @app.route('/api/employers/company/<int:company_id>', methods=['PUT'])
 def join_company(company_id):
@@ -79,9 +124,54 @@ def join_company(company_id):
 
 @app.route('/api/employers/company', methods=['PUT'])
 def quit_company():
-    # TODO: Quit current company
-    # Expected input: employer_id
-    return jsonify({"message": "Left company successfully"})
+    # Get data from request
+    data = request.json
+    if not data or 'employer_id' not in data:
+        return jsonify({"error": "Employer ID is required"}), 400
+    
+    conn = get_db_connection()
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            # First verify if the employer exists and has a company
+            cursor.execute("""
+                SELECT e.UserID, e.Company, c.Name as CompanyName 
+                FROM Employer e, Company c
+                WHERE e.Company = c.CompanyID AND e.UserID = %s
+            """, (data['employer_id'],))
+            employer = cursor.fetchone()
+            
+            if not employer:
+                return jsonify({
+                    "error": "Invalid employer ID"
+                }), 400
+                
+            if not employer['Company']:
+                return jsonify({
+                    "error": "Employer is not part of any company"
+                }), 400
+            
+            # Update employer's company to NULL
+            cursor.execute("""
+                UPDATE Employer 
+                SET Company = NULL 
+                WHERE UserID = %s
+            """, (data['employer_id'],))
+            
+            conn.commit()
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": f"Successfully left company {employer['CompanyName']}"
+            })
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 @app.route('/api/companies/<int:company_id>/locations', methods=['POST'])
 def add_location(company_id):
@@ -151,8 +241,55 @@ def get_all_workers():
 
 @app.route('/api/joboffers/available', methods=['GET'])
 def get_available_jobs():
-    # TODO: Get all available jobs
-    return jsonify({"jobs": []})
+    conn = get_db_connection()
+    if not conn:
+        return jsonify({"error": "Database connection failed"}), 500
+    if conn:
+        try:
+            cursor = conn.cursor(dictionary=True)
+            
+            cursor.execute("""
+                SELECT J.JobOfferID, J.Location, J.Date, J.StartTime, J.EndTime, J.MaxWage, J.WorkingDays, J.Hours, L.Street, L.Number, L.City, C.Name as CompanyName
+                FROM JobOffer as J, Location as L, Company as C
+                WHERE J.Location = L.LocationID
+                  AND L.Company = C.CompanyID
+                  AND J.Status = 'Open'
+                ORDER BY J.Date ASC
+            """)
+            
+            jobs = cursor.fetchall()
+            
+            # Convert datetime/timedelta objects to strings
+            for job in jobs:
+                if job.get('Date'):
+                    job['Date'] = job['Date'].strftime('%Y-%m-%d')
+                if job.get('StartTime'):
+                    # Convert timedelta to string in HH:MM:SS format
+                    total_seconds = int(job['StartTime'].total_seconds())
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    seconds = total_seconds % 60
+                    job['StartTime'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+                if job.get('EndTime'):
+                    # Convert timedelta to string in HH:MM:SS format
+                    total_seconds = int(job['EndTime'].total_seconds())
+                    hours = total_seconds // 3600
+                    minutes = (total_seconds % 3600) // 60
+                    seconds = total_seconds % 60
+                    job['EndTime'] = f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+            
+            cursor.close()
+            conn.close()
+            
+            return jsonify({
+                "message": "Available jobs retrieved successfully",
+                "jobs": jobs
+            })
+            
+        except Error as e:
+            return jsonify({"error": str(e)}), 500
+            
+    return jsonify({"error": "Database connection failed"}), 500
 
 @app.route('/api/joboffers/<int:job_id>/apply', methods=['POST'])
 def apply_to_job(job_id):
