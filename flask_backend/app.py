@@ -80,7 +80,7 @@ def create_company(employer_id):
             
             # First verify if the employer_id exists in Employer table
             cursor.execute("SELECT UserID FROM Employer WHERE UserID = %s", (employer_id,))
-            employer = cursor.fetchone()
+            employer = cursor.fetchall()
             
             if not employer:
                 return jsonify({
@@ -89,8 +89,8 @@ def create_company(employer_id):
             
             # Get the maximum CompanyID to determine the next ID
             cursor.execute("SELECT MAX(CompanyID) as max_id FROM Company")
-            result = cursor.fetchone()
-            next_id = 1 if result['max_id'] is None else result['max_id'] + 1
+            result = cursor.fetchall()
+            next_id = 1 if result[0]['max_id'] is None else result[0]['max_id'] + 1
             
             # Insert new company with columns specified in correct order
             query = "INSERT INTO Company (CompanyID, CreatedBy, Name) VALUES (%s, %s, %s)"
@@ -565,10 +565,10 @@ def update_application_status():
                     "error": f"Application is already {application['Status'].lower()}"
                 }), 400
             
-            # Check if job offer is still open
-            if application['JobStatus'] != 'Open':
+            # Check if job offer is still running
+            if application['JobStatus'] != 'Running':
                 return jsonify({
-                    "error": "Cannot update application status: Job offer is no longer open"
+                    "error": "Cannot update application status: Job status should be 'Running'"
                 }), 400
             
             # Update application status
