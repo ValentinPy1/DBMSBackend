@@ -57,7 +57,6 @@ class DataGenerator:
                 "CompanyID": i,
                 "CreatedBy": random.choice(self.employer_ids),  # Randomly assign an employer
                 "Name": f"Company{i}",
-                "Location": f"City{i}"
             })
         return companies
 
@@ -173,10 +172,10 @@ job_offers = data_gen.generate_job_offers(locations)
 applications = data_gen.generate_applications(job_offers)
 
 # Write CSV files
-write_csv("User.csv", ["UserID", "FirstName", "Surname", "Name", "Email", "PhoneNumber"], users)
-write_csv("Employer.csv", ["CompanyID", "UserID"], employers)
-write_csv("Company.csv", ["CompanyID", "CreatedBy", "Name", "Location"], companies)
-write_csv("Location.csv", ["LocationID", "CompanyID", "Number", "Street", "City"], locations)
-write_csv("Worker.csv", ["UserID", "Experiences", "Description"], workers)
-write_csv("JobOffer.csv", ["JobOfferID", "LocationID", "CreatedBy", "Status", "Date", "StartTime", "EndTime", "MaxWage", "WorkingDays", "Hours"], job_offers)
-write_csv("Application.csv", ["WorkerID", "JobOfferID", "Status", "Date", "WageOffer"], applications)
+write_csv("./data/User.csv", ["UserID", "FirstName", "Surname", "Name", "Email", "PhoneNumber"], users)
+write_csv("./data/Employer.csv", ["CompanyID", "UserID"], employers)
+write_csv("./data/Company.csv", ["CompanyID", "CreatedBy", "Name"], companies)
+write_csv("./data/Location.csv", ["LocationID", "CompanyID", "Number", "Street", "City"], locations)
+write_csv("./data/Worker.csv", ["UserID", "Experiences", "Description"], workers)
+write_csv("./data/JobOffer.csv", ["JobOfferID", "LocationID", "CreatedBy", "Status", "Date", "StartTime", "EndTime", "MaxWage", "WorkingDays", "Hours"], job_offers)
+write_csv("./data/Application.csv", ["WorkerID", "JobOfferID", "Status", "Date", "WageOffer"], applications)
