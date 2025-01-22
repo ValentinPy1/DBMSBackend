@@ -22,7 +22,7 @@ def get_db_connection():
         connection = mysql.connector.connect(
             host=os.getenv('DB_HOST'),
             user=os.getenv('DB_USER'),
-            # password=os.getenv('DB_PASSWORD'),
+            password=os.getenv('DB_PASSWORD'),
             database=os.getenv('DB_NAME')
         )
         print("Database connection successful!")
@@ -93,19 +93,18 @@ def create_company(employer_id):
             next_id = 1 if result['max_id'] is None else result['max_id'] + 1
             
             # Insert new company with columns specified in correct order
-            query = "INSERT INTO Company (CompanyID, CreatedBy, Name, Location) VALUES (%s, %s, %s, %s)"
+            query = "INSERT INTO Company (CompanyID, CreatedBy, Name) VALUES (%s, %s, %s)"
             values = (
                 next_id,  # Use the next available ID
                 employer_id,  # employer ID from URL parameter
                 data['name'],
-                data.get('location', 'TBD')  # location is optional
             )
             
             cursor.execute(query, values)
             
             # Insert a new row in the Employer table for this company
             cursor.execute("""
-                INSERT INTO Employer (Company, UserID) 
+                INSERT INTO Employer (CompanyID, UserID) 
                 VALUES (%s, %s)
             """, (next_id, employer_id))
             
@@ -138,7 +137,7 @@ def join_company(company_id):
             
             # First verify if the employer exists
             cursor.execute("SELECT UserID FROM Employer WHERE UserID = %s", (data['employer_id'],))
-            employer = cursor.fetchone()
+            employer = cursor.fetchall()
             
             if not employer:
                 return jsonify({
@@ -147,7 +146,7 @@ def join_company(company_id):
             
             # Verify if the company exists
             cursor.execute("SELECT CompanyID, Name FROM Company WHERE CompanyID = %s", (company_id,))
-            company = cursor.fetchone()
+            company = cursor.fetchall()
             
             if not company:
                 return jsonify({
@@ -157,7 +156,7 @@ def join_company(company_id):
             # Check if employer is already in this company
             cursor.execute("""
                 SELECT * FROM Employer  
-                WHERE UserID = %s AND Company = %s
+                WHERE UserID = %s AND CompanyID = %s
             """, (data['employer_id'], company_id))
             
             if cursor.fetchone():
@@ -167,7 +166,7 @@ def join_company(company_id):
             
             # Insert new row in Employer table
             cursor.execute("""
-                INSERT INTO Employer (Company, UserID) 
+                INSERT INTO Employer (CompanyID, UserID) 
                 VALUES (%s, %s)
             """, (company_id, data['employer_id']))
             
@@ -177,7 +176,7 @@ def join_company(company_id):
             conn.close()
             
             return jsonify({
-                "message": f"Successfully joined company {company['Name']}"
+                "message": f"Successfully joined company {company[0]['Name']}"
             })
             
         except Error as e:
@@ -199,11 +198,11 @@ def quit_company(employer_id):
             
             # First verify if the employer exists and has this specific company
             cursor.execute("""
-                SELECT e.UserID, e.Company, c.Name as CompanyName, c.CreatedBy
+                SELECT e.UserID, e.CompanyID, c.Name as CompanyName, c.CreatedBy
                 FROM Employer e, Company c
-                WHERE e.Company = c.CompanyID 
+                WHERE e.CompanyID = c.CompanyID 
                 AND e.UserID = %s 
-                AND e.Company = %s
+                AND e.CompanyID = %s
             """, (employer_id, data['company_id']))
             employer = cursor.fetchone()
             
@@ -215,8 +214,8 @@ def quit_company(employer_id):
             # Update the employer's company to NULL
             cursor.execute("""
                 UPDATE Employer 
-                SET Company = NULL 
-                WHERE UserID = %s AND Company = %s
+                SET CompanyID = NULL 
+                WHERE UserID = %s AND CompanyID = %s
             """, (employer_id, data['company_id']))
             
             conn.commit()
@@ -262,7 +261,7 @@ def add_location(company_id):
             next_id = 1 if result['max_id'] is None else result['max_id'] + 1
             
             # Insert new location
-            query = "INSERT INTO Location (LocationID, Company, Street, Number, City) VALUES (%s, %s, %s, %s, %s)"
+            query = "INSERT INTO Location (LocationID, CompanyID, Street, Number, City) VALUES (%s, %s, %s, %s, %s)"
             values = (
                 next_id,
                 company_id,
@@ -301,9 +300,9 @@ def delete_location(company_id):
             
             # First verify if the location exists and belongs to the company
             cursor.execute("""
-                SELECT LocationID, Company 
+                SELECT LocationID, CompanyID 
                 FROM Location 
-                WHERE LocationID = %s AND Company = %s
+                WHERE LocationID = %s AND CompanyID = %s
             """, (data['location_id'], company_id))
             location = cursor.fetchone()
             
@@ -316,7 +315,7 @@ def delete_location(company_id):
             cursor.execute("""
                 SELECT COUNT(*) as count 
                 FROM Location 
-                WHERE Company = %s
+                WHERE CompanyID = %s
             """, (company_id,))
             location_count = cursor.fetchone()['count']
             
@@ -329,7 +328,7 @@ def delete_location(company_id):
             cursor.execute("""
                 SELECT COUNT(*) as count 
                 FROM JobOffer 
-                WHERE Location = %s
+                WHERE LocationID = %s
             """, (data['location_id'],))
             joboffer_count = cursor.fetchone()['count']
             
@@ -374,7 +373,7 @@ def create_job_offer(employer_id):
             
             # First verify if the employer exists
             cursor.execute("""
-                SELECT e.UserID, e.Company 
+                SELECT e.UserID, e.CompanyID 
                 FROM Employer e
                 WHERE e.UserID = %s
             """, (employer_id,))
@@ -387,10 +386,10 @@ def create_job_offer(employer_id):
             
             # Verify if the location exists and belongs to employer's company
             cursor.execute("""
-                SELECT LocationID, Company 
+                SELECT LocationID, CompanyID 
                 FROM Location 
-                WHERE LocationID = %s AND Company = %s
-            """, (data['location_id'], employer[0]['Company']))
+                WHERE LocationID = %s AND CompanyID = %s
+            """, (data['location_id'], employer[0]['CompanyID']))
             location = cursor.fetchall()  # Fetch ALL results
             
             if not location:
@@ -406,7 +405,7 @@ def create_job_offer(employer_id):
             # Insert new job offer
             query = """
                 INSERT INTO JobOffer (
-                    JobOfferID, Location, CreatedBy, Status, Date, 
+                    JobOfferID, LocationID, CreatedBy, Status, Date, 
                     StartTime, EndTime, MaxWage, WorkingDays, Hours
                 ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
@@ -465,7 +464,7 @@ def get_my_job_offers(employer_id):
             base_query = """
                 SELECT 
                     j.JobOfferID,
-                    j.Location,
+                    j.LocationID,
                     j.Status,
                     j.Date,
                     j.StartTime,
@@ -478,8 +477,8 @@ def get_my_job_offers(employer_id):
                     l.City,
                     c.Name as CompanyName
                 FROM JobOffer j, Location l, Company c
-                WHERE j.Location = l.LocationID
-                  AND l.Company = c.CompanyID
+                WHERE j.LocationID = l.LocationID
+                  AND l.CompanyID = c.CompanyID
                   AND j.CreatedBy = %s
             """
             
@@ -654,10 +653,10 @@ def get_available_jobs():
             cursor = conn.cursor(dictionary=True)
             
             cursor.execute("""
-                SELECT J.JobOfferID, J.Location, J.Date, J.StartTime, J.EndTime, J.MaxWage, J.WorkingDays, J.Hours, L.Street, L.Number, L.City, C.Name as CompanyName
+                SELECT J.JobOfferID, J.LocationID, J.Date, J.StartTime, J.EndTime, J.MaxWage, J.WorkingDays, J.Hours, L.Street, L.Number, L.City, C.Name as CompanyName
                 FROM JobOffer as J, Location as L, Company as C
-                WHERE J.Location = L.LocationID
-                  AND L.Company = C.CompanyID
+                WHERE J.LocationID = L.LocationID
+                  AND L.CompanyID = C.CompanyID
                   AND J.Status = 'Open'
                 ORDER BY J.Date ASC
             """)
@@ -828,8 +827,8 @@ def get_my_applications(worker_id):
                     c.Name as CompanyName
                 FROM Application a, JobOffer j, Location l, Company c
                 WHERE a.JobOfferID = j.JobOfferID
-                  AND j.Location = l.LocationID
-                  AND l.Company = c.CompanyID
+                  AND j.LocationID = l.LocationID
+                  AND l.CompanyID = c.CompanyID
                   AND a.WorkerID = %s
             """
             
@@ -899,8 +898,8 @@ def get_job_employer_info(job_id):
                     l.City
                 FROM JobOffer j, User u, Location l, Company c
                 WHERE j.CreatedBy = u.UserID
-                  AND j.Location = l.LocationID
-                  AND l.Company = c.CompanyID
+                  AND j.LocationID = l.LocationID
+                  AND l.CompanyID = c.CompanyID
                   AND j.JobOfferID = %s
             """, (job_id,))
             
